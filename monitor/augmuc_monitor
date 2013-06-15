@@ -1,0 +1,302 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use threads;
+
+use FindBin;
+use File::Touch;
+use WWW::Mechanize;
+use IO::CaptureOutput ('capture_exec');
+use Log::Log4perl(':easy');
+use Mail::Sendmail;
+use File::Copy;
+
+# --------------------------
+# CONFIGURATION
+# --------------------------
+# times in seconds
+my $host              = "http://www.aug-muc.de";                     # hostname of the confluence server (from 1st arg)
+my $loginurl          = "$host/login.action";                        # URL of the login page to get
+my $formname          = "loginform";                                 # name of login form to check
+my $formaction        = "/dologin.action";                           # action of the login form to check
+
+my $private_key       = "/root/augmuc/ssh/augmuc_augmuc_rsa";        # private key file for login
+my $remote_user	      = "augmuc";                                    # remote user to user for login
+my $remote_host       = "aug-muc.de";                                # remote host to login
+my $confluence_root   = "/home/augmuc/confluence-std";               # confluence root directory
+my $pid_command       = "/sbin/pidof $confluence_root/jre/bin/java"; # command for getting the pid of a running confluence
+my $terminate_command = "kill #pid";                                # command for friendly telling tomcat to terminate
+my $kill_command      = "kill -9 #pid";                             # command for killing tomcat
+my $shutdown_command  = "$confluence_root/bin/shutdown.sh";          # shutdown command for confluence
+my $startup_command   = "$confluence_root/bin/startup.sh";           # startup command for confluence
+
+my $timeout           = 10;                                          # how long should I wait before aborting the request
+my $max_check_retry   = 1;                                           # how often should I retry to check confluence
+my $wait_before_check = 10;                                          # how long should I wait in seconds before recheck
+my $service_name      = "Confluence";                                # service name of confluence service
+my $max_restart_retry = 2;                                           # how often should I retry to restart confluence
+my $wait_before_start = 30;                                          # how long should I wait in seconds before restart
+my $wait_after_start  = 240;                                         # how long should I wait until check after restart
+my $lockfile          = "/var/run/augmuc_monitor.lck";               # this file is created after the unsuccessful restart of confluence
+my @mail_recipients   = ('info@aug-muc.de');                         # who should receive the emails
+my $smtp_host         = 'mail.mnet-online.de';                       # which smtp host should I use to send mails
+my $logfile           = '/var/log/augmuc_monitor.log';               # name of the log file MUST BE CHANGED IN LOGGER_CONFIGURATION, TOO!!
+my $logger_configuration = q(
+    log4perl.category                                     = INFO, File, Screen
+    log4perl.appender.Screen                              = Log::Log4perl::Appender::Screen
+    log4perl.appender.Screen.layout                       = PatternLayout
+    log4perl.appender.Screen.layout.ConversionPattern     = %m%n
+
+    log4perl.appender.File                              = Log::Log4perl::Appender::File
+    log4perl.appender.File.filename                     = /var/log/augmuc_monitor.log
+    log4perl.appender.File.MaxFileSize					= 10
+    log4perl.appender.File.layout                       = PatternLayout
+    log4perl.appender.File.layout.ConversionPattern     = %d{ISO8601} [%-5p] - %m%n
+);
+my $max_logfile_size  = 10_000_000;
+my $max_logfile_count = 5;
+# --------------------------
+unshift @{ $Mail::Sendmail::mailcfg{'smtp'} }, $smtp_host;
+
+# --------------------------
+# GLOBALS
+# --------------------------
+my $check_retry_count   = 0;
+my $restart_retry_count = 0;
+
+# --------------------------
+# ENTRY POINT
+# --------------------------
+exit main();
+# --------------------------
+
+sub main {
+	rotate_logfile();
+
+	Log::Log4perl::init(\$logger_configuration);
+
+	if (-f $lockfile) {
+		INFO "I will not continue until the lock file '$lockfile' is deleted!\n";
+	} else {
+		check_confluence();
+	}
+
+	return 0;
+}
+
+sub check_confluence {
+	my ($thread) = threads->create(
+		sub {
+			my ($loginurl, $formname, $formaction) = @_;
+			my $mech = WWW::Mechanize->new(onerror => undef, quiet => 1);
+
+			DEBUG "Get page from '$host'";
+			my $response = $mech->get($host);
+			return (0, "Error getting page at '$host': " . $response->status_line)
+			  if !$response->is_success;
+
+			DEBUG "Get login page from '$loginurl'";
+			$response = $mech->get($loginurl);
+			return (0, "Error getting login page at '$loginurl': " . $response->status_line)
+			  if !$response->is_success;
+
+			DEBUG "Search for login form '$formname'";
+			my $login_form = $mech->form_name($formname);
+			return (0, "The form '$formname' could not be found!") if !$login_form;
+
+			DEBUG "Check if action matches '$formaction'";
+			return (0, "The form action '" . $login_form->action . "' does not match '$formaction'")
+			  if $login_form->action !~ /$formaction$/;
+
+			return (1);
+		},
+		$loginurl,
+		$formname,
+		$formaction
+	);
+
+	for my $second (1 .. $timeout) {
+		last if !$thread->is_running();
+		sleep(1);
+	}
+
+	if ($thread->is_running()) {
+		$thread->kill('SIGKILL');
+		$thread->detach();
+		error_handler("Timeout getting login page '$loginurl'");
+	} else {
+		my ($result, $message) = $thread->join();
+		if (!$result) {
+			error_handler($message);
+		} else {
+			INFO "Confluence at '$host' is up and running.";
+		}
+	}
+}
+
+sub error_handler {
+	ERROR @_;
+
+	$check_retry_count += 1;
+	if ($check_retry_count <= $max_check_retry) {
+		INFO "I try to recheck confluence for the $check_retry_count time in $wait_before_check seconds...";
+		waiting($wait_before_check);
+		INFO "Recheck if confluence is up and running...";
+		check_confluence();
+		exit 0;
+	}
+
+	$restart_retry_count += 1;
+	if ($restart_retry_count <= $max_restart_retry) {
+		INFO "I'll stop confluence now and wait $wait_before_start seconds before restart";
+		my $error = stop_confluence();
+		if ($error) {
+			WARN "Error stopping confluence: $error. Assuming confluence is already down.";
+		} else {
+			waiting($wait_before_start);
+		}
+
+		while (1) {
+			INFO "I start confluence now and wait $wait_after_start seconds before recheck...";
+			my $error = start_confluence();
+			if ($error) {
+				if ($restart_retry_count >= $max_restart_retry) {
+					my $message = "Error starting confluence for $restart_retry_count times ($error). Giving up.";
+					ERROR $message;
+					INFO "I create the file '$lockfile' to prevent running again and again. Delete this file to activate the monitor again.";
+					if (touch($lockfile) != 1) {
+						ERROR "Cannot touch lock file '$lockfile'. Monitor may be running again and again!";
+					}
+					send_mail($message, $lockfile);
+					die $message;
+				}
+
+				ERROR "Error starting confluence: $error. Retry in $wait_before_start seconds...";
+				waiting($wait_before_start);
+				$restart_retry_count += 1;
+				next;
+			} else {
+				last;
+			}
+		}
+
+		waiting($wait_after_start);
+		INFO "Recheck if confluence is up and running...";
+		check_confluence();
+		exit 0;
+	}
+
+	INFO "I create the file '$lockfile' to prevent running again and again. Delete this file to activate the monitor again.";
+	if (touch($lockfile) != 1) {
+		ERROR "Cannot touch lock file '$lockfile'. " . "Monitor may be running again and again!";
+	}
+	send_mail(@_);
+	die @_;
+}
+
+sub send_mail {
+	my ($text) = @_;
+
+	if(!$smtp_host) {
+		INFO "No smtp host configured. I will not send any mails!"
+        } else {
+		INFO "Confluence is down and I failed to restart confluence successfully. Sending mail to @mail_recipients.";
+        }
+
+	my %mail = (
+		To      => join(', ', @mail_recipients),
+		From    => '<Confluence Monitor> noreply@aug-muc.de',
+		Message => $text
+		  . "\r\n\r\nThis monitor is not running again until the file '$lockfile' is deleted!",
+		Subject => "There is a problem with Confluence on $host"
+	);
+
+	sendmail(%mail)
+	  or die $Mail::Sendmail::error;
+}
+
+sub stop_confluence {
+        my $pid = run_ssh_command($pid_command);
+        
+	if(!$pid) {
+		DEBUG "Confluence is already down.";
+		return '';
+	} 
+	
+	DEBUG "Confluence is running using pid $pid";
+	DEBUG "Telling confluence to shutdown...";
+	run_ssh_command($shutdown_command);
+	DEBUG "Wait for 20 seconds until check if the shutdown was successful...";
+	waiting(20);
+
+	if($pid eq run_ssh_command($pid_command)) {
+		DEBUG "Confluence could not be shutdown. Try to terminating...";
+
+		my $command = $terminate_command;
+		$command =~ s/#pid/$pid/;
+		run_ssh_command($command);
+
+		if($pid eq run_ssh_command($pid_command)) {
+			DEBUG "Confluence could not be terminated. Try to kill now...";
+
+			my $command = $kill_command;
+			$command =~ s/#pid/$pid/;
+			run_ssh_command($command);
+		}
+	}
+
+
+	if($pid eq run_ssh_command($pid_command)) {
+		return "Confluence could not be killed and is running under pid $pid!";
+	}
+
+	return '';
+}
+
+sub start_confluence {
+	run_ssh_command($startup_command);
+	waiting(10);
+
+	if(run_ssh_command($pid_command) eq '') {
+		return "Cannot start confluence!";
+	}
+
+	return '';
+}
+
+sub run_ssh_command {
+	my (@cmd) = @_;
+
+        my @ssh_command = ("/usr/bin/ssh -i $private_key $remote_user\@$remote_host \"", @cmd, "\"");
+	DEBUG "Running ssh command '@ssh_command'";
+        my $result = qx(@ssh_command);
+
+	$result =~ s/^\s+//;
+	$result =~ s/\s+$//;
+
+	return $result;
+}
+
+sub waiting {
+	my ($seconds) = @_;
+	for my $second (1 .. $seconds) {
+		print STDERR ($seconds - $second + 1) . '...';
+		sleep 1;
+	}
+	print "\n";
+}
+
+sub rotate_logfile {
+	if (-f $logfile && -s $logfile > $max_logfile_size) {
+		my $index;
+		for ($index = $max_logfile_count - 1 ; $index >= 1 ; $index--) {
+			if (-f "$logfile.$index") {
+				move("$logfile.$index", "$logfile." . ($index + 1))
+				  or die "Cannot rotate logfile at index $index";
+			}
+		}
+		move($logfile, "$logfile.1")
+		  or die "Cannot rotate logfile";
+	}
+}

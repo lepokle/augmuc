@@ -1,0 +1,11 @@
+# These configuration file is for rotating the backups
+/root/augmuc/backup/confluence_backup.tar.gz {
+	daily
+	nocompress
+	nocreate
+	maxage 6
+	nomail
+	rotate 1
+	missingok
+}
+
