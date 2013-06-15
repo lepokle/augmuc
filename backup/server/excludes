@@ -1,0 +1,8 @@
+/backups/
+/bundled-plugins/
+/bundled-plugins_language/
+/plugin-cache/
+/plugins-osgi-cache/
+/plugins-temp/
+/restore/
+/temp/
