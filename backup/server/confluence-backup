@@ -1,0 +1,97 @@
+#!/bin/bash -e
+
+BACKUP_BASE_DIR=/home/backup
+BACKUP_NAME="confluence_backup"
+BACKUP_OWNER=backup
+BACKUP_GROUP=backup
+BACKUP_DIR="$BACKUP_BASE_DIR/$BACKUP_NAME"
+BACKUP_FILE="$BACKUP_NAME.tar.gz"
+BACKUP_LOGROTATE="/usr/sbin/logrotate --force --state /root/confluence-backup.logrotate.state /root/confluence-backup.logrotate.options"
+
+CONFLUENCE_DATABASE=confluence
+CONFLUENCE_HOME=/home/augmuc/confluence-data
+CONFLUENCE_CLEANUP_DIRECTORIES="
+	backups 
+	bundled-plugins 
+	bundled-plugins_language
+	plugin-cache
+	plugins-osgi-cache
+	plugins-temp
+	restore
+	temp
+"
+
+
+
+function cleanup_file {
+	if [ -f "$BACKUP_BASE_DIR/$BACKUP_FILE" ]; then
+		echo "Cleanup $BACKUP_BASE_DIR/$BACKUP_FILE becaue it may be corrupt!"
+		rm -f "$BACKUP_BASE_DIR/$BACKUP_FILE"
+	else
+		echo "No file to cleanup"
+	fi
+}
+
+function cleanup_directory {
+	if [ -d "$BACKUP_DIR" ]; then
+		echo "Cleanup $BACKUP_DIR"
+		rm -rf "$BACKUP_DIR"
+	else
+		echo "No backup directory to cleanup"
+	fi
+}
+
+function cleanup {
+	cleanup_file
+	cleanup_directory
+}
+
+echo "--------------------------------------"
+echo $(date)
+echo "--------------------------------------"
+
+if [ -n "BACKUP_LOGROTATE" ]; then
+	echo "Rotate old backup"
+	$BACKUP_LOGROTATE || echo "Could not rotate backup. This maybe an error."
+fi
+
+if [ -d "$BACKUP_DIR" ]; then 
+	echo "Backup directory "$BACKUP_DIR" already exists. Cannot continue."
+	exit 1
+fi
+
+if [ -f "$BACKUP_BASE_DIR/$BACKUP_FILE" ]; then 
+	echo "Backup file "$BACKUP_BASE_DIR/$BACKUP_FILE" already exists. Cannot continue."
+	exit 1
+fi
+
+trap "trap - INT TERM EXIT; cleanup; exit 2" INT TERM EXIT
+
+echo "Create backup directory $BACKUP_DIR"
+mkdir -p "$BACKUP_DIR" 
+
+echo "Backup Confluence data directory $CONFLUENCE_HOME to $BACKUP_DIR"
+cp -a "$CONFLUENCE_HOME" "$BACKUP_DIR"
+
+echo "Clean up backed up data directory to save space"
+for DIRECTORY in $CONFLUENCE_CLEANUP_DIRECTORIES; do
+	DIRECTORY_TO_DELETE="$BACKUP_DIR/${CONFLUENCE_HOME##*/}/$DIRECTORY"
+	echo "Clean up $DIRECTORY_TO_DELETE/"'*'
+	rm -rf "$DIRECTORY_TO_DELETE/"*
+done
+
+echo "Backup database $CONFLUENCE_DATABASE"
+mysqldump --quick --single-transaction "$CONFLUENCE_DATABASE" > "$BACKUP_DIR/confluence.sql"
+
+cd "$BACKUP_BASE_DIR"
+echo "Zip backup directory $BACKUP_DIR to $BACKUP_BASE_DIR/$BACKUP_FILE"
+tar -czf "$BACKUP_FILE" "$BACKUP_NAME"
+
+echo "Set new owner ($BACKUP_OWNER) and group ($BACKUP_GROUP) for backup file"
+chgrp $BACKUP_GROUP "$BACKUP_FILE"
+chown $BACKUP_OWNER "$BACKUP_FILE"
+
+trap - INT TERM EXIT
+cleanup_directory
+exit 0
+
