@@ -17,7 +17,7 @@ echo "Create backup directory $BACKUP_DIR"
 mkdir -p "$BACKUP_DIR" 
 
 echo "Backup Confluence data directory $CONFLUENCE_HOME to $BACKUP_DIR"
-rsync --archive --progress --delete --delete-excluded --exclude-from="$(dirname $0)/excludes" "$CONFLUENCE_HOME/" "$BACKUP_DIR/confluence-data"
+rsync --archive --delete --delete-excluded --exclude-from="$(dirname $0)/excludes" "$CONFLUENCE_HOME/" "$BACKUP_DIR/confluence-data"
 
 echo "Backup database $CONFLUENCE_DATABASE"
 mysqldump --quick --single-transaction "$CONFLUENCE_DATABASE" > "$BACKUP_DIR/confluence.sql"
