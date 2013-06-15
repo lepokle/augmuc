@@ -11,7 +11,7 @@ echo $(date)
 echo "----------------------------------"
 
 echo "Synchronize backup from $REMOTE_HOST"
-/usr/bin/rsync --archive --progress --delete --rsh "ssh -i $PRIVATE_KEY" $REMOTE_USER@$REMOTE_HOST:"$REMOTE_PATH/" "$LOCAL_PATH/" > /tmp/augmuc_backup.log 2>&1 || cat /tmp/augmuc_backup.log | /root/sendmail 'Confluence Backup <noreply@aug-muc.de>' "There is a problem with the backup of Confluence" "leo.vonklenze@tngtech.com"
+/usr/bin/rsync --archive --delete --rsh "ssh -i $PRIVATE_KEY" $REMOTE_USER@$REMOTE_HOST:"$REMOTE_PATH/" "$LOCAL_PATH/" > /tmp/augmuc_backup.log 2>&1 || cat /tmp/augmuc_backup.log | /root/sendmail 'Confluence Backup <noreply@aug-muc.de>' "There is a problem with the backup of Confluence" "leo.vonklenze@tngtech.com"
 
 cat /tmp/augmuc_backup.log
 
