@@ -1,7 +1,7 @@
 #!/bin/bash -e
 
-BACKUP_BASE_DIR=/home/backup
-BACKUP_NAME="confluence_backup"
+BACKUP_BASE_DIR=/var/backups
+BACKUP_NAME="confluence"
 BACKUP_OWNER=backup
 BACKUP_GROUP=backup
 BACKUP_DIR="$BACKUP_BASE_DIR/$BACKUP_NAME"
