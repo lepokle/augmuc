@@ -2,7 +2,7 @@
 
 REMOTE_HOST=www.aug-muc.de
 REMOTE_USER=backup
-REMOTE_PATH=/home/backup/confluence_backup
+REMOTE_PATH=/var/backups/confluence
 LOCAL_PATH=/root/augmuc/backup
 PRIVATE_KEY=/root/augmuc/ssh/augmuc_backup_rsa
 
