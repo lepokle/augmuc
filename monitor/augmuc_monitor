@@ -25,9 +25,9 @@ my $private_key       = "/root/augmuc/ssh/augmuc_augmuc_rsa";        # private k
 my $remote_user	      = "augmuc";                                    # remote user to user for login
 my $remote_host       = "aug-muc.de";                                # remote host to login
 my $confluence_root   = "/home/augmuc/confluence-std";               # confluence root directory
-my $pid_command       = "/sbin/pidof $confluence_root/jre/bin/java"; # command for getting the pid of a running confluence
-my $terminate_command = "kill #pid";                                # command for friendly telling tomcat to terminate
-my $kill_command      = "kill -9 #pid";                             # command for killing tomcat
+my $pid_command       = "/bin/pidof $confluence_root/jre/bin/java"; # command for getting the pid of a running confluence
+my $terminate_command = "/bin/kill #pid";                                # command for friendly telling tomcat to terminate
+my $kill_command      = "/bin/kill -9 #pid";                             # command for killing tomcat
 my $shutdown_command  = "$confluence_root/bin/shutdown.sh";          # shutdown command for confluence
 my $startup_command   = "$confluence_root/bin/startup.sh";           # startup command for confluence
 
