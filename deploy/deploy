@@ -1,0 +1,40 @@
+#!/bin/bash
+set -e 
+
+VERSION="$1"
+
+if [ -z "$VERSION" ]; then
+     echo "Give confluence version as first parameter!"
+     exit 1
+fi
+
+CONFLUENCE_HOME=/var/opt/confluence
+CONFLUENCE_APP=/opt/confluence
+
+TMPDIR="$(mktemp -d)"
+
+cd $TMPDIR
+echo "Download Atlassian Confluence $VERSION"
+wget "http://www.atlassian.com/software/confluence/downloads/binary/atlassian-confluence-$VERSION-war.tar.gz"
+
+echo "Extract archive"
+tar xzf atlassian-confluence-$VERSION-war.tar.gz
+
+echo "Set Confluence Home to $CONFLUENCE_HOME"
+mkdir -p "confluence-$VERSION/edit-webapp/WEB-INF/classes/"
+echo "confluence.home=$CONFLUENCE_HOME" > "confluence-$VERSION/edit-webapp/WEB-INF/classes/confluence-init.properties"
+
+echo "Build Confluence"
+cd "confluence-$VERSION"
+/bin/bash build.sh
+
+echo "Deploying..."
+rm -r "$CONFLUENCE_APP/webapps/ROOT" 
+mkdir -p "$CONFLUENCE_APP/webapps/ROOT"
+unzip dist/*.war -d "$CONFLUENCE_APP/webapps/ROOT"
+chown -R root:confluencero "$CONFLUENCE_APP/webapps/ROOT"
+chmod -R u=rwX,g=rX,o= "$CONFLUENCE_APP/webapps/ROOT"
+
+
+echo "You can remove $TMPDIR now!"
+
